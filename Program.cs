@@ -1,119 +1,90 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿// Dependencies
+using System.Text.RegularExpressions;
+using VideoLibrary;
 using YoutubeExplode;
-using YoutubeExplode.Common;
-using YoutubeExplode.Converter;
-using YoutubeExplode.Videos;
+using YoutubeExplode.Playlists;
 using YoutubeExplode.Videos.Streams;
 
-namespace YTscott
+class Program
 {
-    class Program
+    static void Main(string[] args)
     {
-        static YoutubeClient youtube = new YoutubeClient();
+        runProgram();
+        Console.ReadKey();
+    }
 
-        static string url;
+    static string MakeValidFileName(string name)
+    {
+        string invalidChars = new string(Path.GetInvalidFileNameChars());
+        string regexPattern = $"[{Regex.Escape(invalidChars)}]";
+        return Regex.Replace(name, regexPattern, "_");
+    }
 
-        // !!! START OF THE APP !!!
-        static void Main(string[] args)
+    static async void runProgram()
+    {
+        var youtube = new YoutubeClient();
+
+        Console.Write("WELCOME TO YTSCOTT!\n" +
+                      "-------------------\n" +
+                      "Please provide a valid playlist URL.\n\n");
+
+        startLabel:
+        Console.Write("Playlist URL: ");
+        var playlistUrl = Console.ReadLine();
+
+        var playlist = youtube.Playlists.GetAsync(playlistUrl);
+        Console.WriteLine($"\nLoaded: \"{playlist.Result.Title}\" by {playlist.Result.Author}");
+
+        confirmSelection:
+        Console.Write("\nIs this information correct? (Y/N): ");
+        var input = Console.ReadLine();
+        if (input != null)
         {
-            Startup();
-        }
-
-        // HELPER FUNCTION : used as a sort of "title card" to start and introduce the app.
-        public static void Startup()
-        {
-            Console.WriteLine(
-                " _  _  ____  ___   ___  _____  ____  ____\n" +
-                "( \\/ )(_  _)/ __) / __)(  _  )(_  _)(_  _)\n" +
-                " \\  /   )(  \\__ \\( (__  )(_)(   )(    )(\n" +
-                " (__)  (__) (___/ \\___)(_____) (__)  (__)\n\n" +
-                "---------------------------------------------\n"
-                );
-            Console.WriteLine("Welcome to YTscott, " +
-                "\na command-line console application YouTube playlist to MP3 set converter \n" +
-                "designed for use almost exclusively by Scott Bader. " +
-                "\nUse it at your own risk, I guess. \n" +
-                "(It's like, kinda illegal. Just don't do bad people things. I use it for my own playlists on old MP3 players." +
-                "\nI sync my Spotify playlists with my YouTube playlists and then just download them through this thing to the players)\n" +
-                "\nPRESS ANY KEY TO CONTINUE...");
-            Console.ReadKey();
-            Task.WaitAll(AskForUrl());
-            Task.WaitAll(GetSongs());
-            Console.WriteLine("\n\n\nPRESS ANY KEY TO EXIT...");
-            Console.ReadKey();
-        }
-
-        // HELPER FUNCTION : used to get the URL variable for the program.
-        public static async Task AskForUrl()
-        {
-            Console.Write("\n\nYouTube URL: ");
-            string url = Console.ReadLine();
-            try
+            input = input.ToUpper();
+            if (input == "Y")
             {
-                Program.url = url;
-                var videos = await youtube.Playlists.GetVideosAsync(Program.url);
-                var playlist = await youtube.Playlists.GetAsync(Program.url);
-                Console.WriteLine("\n\n:  " + playlist.Title + "  :  by " + playlist.Author + "  :\n" +
-                                  "---------------------------------------------------\n");
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e.Message + "\n\n");
-                Task.WaitAll(AskForUrl());
-            }
-        }
-
-        // HELPER FUNCTION : used to get the data for every song in the playlist
-        public static async Task GetSongs()
-        {
-            try
-            {
-                var videos = await youtube.Playlists.GetVideosAsync(Program.url);
-                
-                foreach (var song in videos)
+                Console.WriteLine("\nCONFIRMED.\nProceeding with downloads...");
+                var videos = youtube.Playlists.GetVideosAsync(playlist.Result.Id);
+                await foreach (PlaylistVideo video in videos)
                 {
-                    Console.WriteLine(":  " + song.Title + "  :  by " + song.Author + "  :");
-                }
-
-                Console.WriteLine("PRESS ANY BUTTON TO CONTINUE TO DOWNLOAD ALL...");
-                Console.ReadKey();
-                Task.WaitAll(DownloadSongs());
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e.Message + "\n\n");
-                Task.WaitAll(AskForUrl());
-            }
-        }
-
-        public static async Task DownloadSongs()
-        {
-            try
-            {
-                var videos = await youtube.Playlists.GetVideosAsync(Program.url);
-                var playlist = await youtube.Playlists.GetAsync(Program.url);
-                Directory.CreateDirectory("./playlists/" + playlist.Title + "/");
-
-                foreach (var song in videos)
-                {
-                    Console.Write("\n:  " + song.Title + "  :  ");
-                    youtube.Videos.DownloadAsync(song.Url, "./playlists/" + playlist.Title + "/" + song.Title + ".mp3");
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.Write("■");
+                    Console.Write($"\nDOWNLOADING --> ");
+                    Console.ForegroundColor = ConsoleColor.Blue;
+                    Console.Write(video.Title + "\n");
                     Console.ForegroundColor = ConsoleColor.White;
-                    //■
+                    var manifest = await youtube.Videos.Streams.GetManifestAsync(video.Id);
+                    var streamInfo = manifest.GetAudioStreams().GetWithHighestBitrate();
+                    /*var stream = await youtube.Videos.Streams.GetAsync(streamInfo);*/
+                    Directory.CreateDirectory(playlist.Result.Title);
+                    var filePath = $"./{playlist.Result.Title}/{MakeValidFileName(video.Title)}.mp3";
+                    await youtube.Videos.Streams.DownloadAsync(streamInfo, filePath);
+                    if (File.Exists(filePath))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine("DOWNLOADED.");
+                        Console.ForegroundColor = ConsoleColor.White;
+                    }
+                    else
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("FAILED.");
+                        Console.ForegroundColor = ConsoleColor.White;
+                    }
                 }
             }
-            catch (Exception e)
+            else if (input == "N")
             {
-                Console.WriteLine("\n" + e.Message + "\n\n");
-                Task.WaitAll(DownloadSongs());
+                goto startLabel;
             }
+            else
+            {
+                Console.WriteLine("\nINVALID INPUT. TRY AGAIN.");
+                goto confirmSelection;
+            }
+        }
+        else
+        {
+            Console.WriteLine("\nINVALID INPUT. TRY AGAIN.");
+            goto confirmSelection;
         }
     }
 }
